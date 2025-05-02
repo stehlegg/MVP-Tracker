@@ -1,12 +1,7 @@
 Keep track of High Value Customers
 
-Features:
-  
-  When they are ready they are marked on the Map and on the Compass
-  Map/Compass markers follow their position so you always now where you can find them.
-  Notifies you when a MVP has a dealer assigned to them.
   /*:
-  Features:
+Features:
   * Keeps Track of when MVPs are ready to get offered product by you
   * When they are ready they are marked on the Map and on the Compass
   * Map/Compass markers follow their position so you always now where you can find them.
