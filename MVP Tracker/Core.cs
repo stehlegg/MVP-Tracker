@@ -11,7 +11,7 @@ using ScheduleOne.Persistence.Datas;
 using ScheduleOne.Quests;
 using ScheduleOne.PlayerScripts;
 
-[assembly: MelonInfo(typeof(MVP_Tracker.Core), "MVP Tracker", "1.0.0", "Stehlel", null)]
+[assembly: MelonInfo(typeof(MVP_Tracker.Core), "MVP Tracker", "1.1.0", "Stehlel", null)]            // UPDATE VERSION NUMBER LOL
 [assembly: MelonGame("TVGS", "Schedule I")]
 
 namespace MVP_Tracker
