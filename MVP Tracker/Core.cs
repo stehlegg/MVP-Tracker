@@ -1,20 +1,15 @@
-﻿using System;
-using System.Collections;
-using System.Collections.Generic;
+﻿using System.Collections;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 using MelonLoader;
-using FishNet;                           // for InstanceFinder
-using FishNet.Managing;
 using ScheduleOne.Economy;
 using ScheduleOne.NPCs;
 using ScheduleOne.UI.Compass;
-using HarmonyLib;
-using ScheduleOne.Quests;
 using ScheduleOne.DevUtilities;
 using ScheduleOne.Map;
 using ScheduleOne.Persistence.Datas;
-using System.Xml.Linq;
+using ScheduleOne.Quests;
+using ScheduleOne.PlayerScripts;
 
 [assembly: MelonInfo(typeof(MVP_Tracker.Core), "MVP Tracker", "1.0.0", "Stehlel", null)]
 [assembly: MelonGame("TVGS", "Schedule I")]
@@ -30,11 +25,12 @@ namespace MVP_Tracker
             "Jack","Jackie","Jeremy","Karen","Chris"
         };
 
+        private List<QuestEntry> questEntries = new List<QuestEntry>();
         private HashSet<String> entries = new HashSet<string>();
         private HashSet<String> onCd = new HashSet<string>();
         private readonly Dictionary<string, NPCPoI> pois = new Dictionary<string, NPCPoI>();
         private readonly Dictionary<string, CompassManager.Element> compassEls = new Dictionary<string, CompassManager.Element>();
-        private Dictionary<String, String> checklist = new Dictionary<string, string>();
+        public Quest quest;
 
         public override void OnInitializeMelon()
         {
@@ -49,16 +45,45 @@ namespace MVP_Tracker
                 MelonCoroutines.Stop(CooldownTicker());
                 return;
             }
+            else
+            {
+                entries.Clear();
+                onCd.Clear();
+                pois.Clear();
+                compassEls.Clear();
+                questEntries.Clear();
 
-            entries = new HashSet<string>();
-            onCd = new HashSet<string>();
-            Dictionary<string, NPCPoI> pois = new Dictionary<string, NPCPoI>();
-            Dictionary<string, CompassManager.Element> compassEls = new Dictionary<string, CompassManager.Element>();
-            Dictionary<String, String> checklist = new Dictionary<string, string>();
+                if (Player.Local != null)
+                {
+                    MelonCoroutines.Start(InitializeNextFrame());
+                }
+                else
+                {
+                    Player.onLocalPlayerSpawned += () =>
+                    {
+                        MelonCoroutines.Start(InitializeNextFrame());
+                    };
+                }
+            }
+        }
 
-            //SceneManager.sceneLoaded -= OnSceneLoaded;
+        private IEnumerator InitializeNextFrame()
+        {
+            yield return null;
+
+            quest = QuestManaging.CreateQuest("MVP Tracker");
+            quest.ClearEntries();
+            try
+            {
+                quest.InitializeQuest("MVP Tracker", "Helps you keep track of the richest customers", [], QuestManaging.guid);
+            }
+            catch (Exception e)
+            {
+                yield break;
+            }
+            quest.Begin();
+
             Customer.onCustomerUnlocked += HandleCustomerUnlocked;
-
             foreach (var cust in Customer.UnlockedCustomers)
                 HandleCustomerUnlocked(cust);
 
@@ -89,6 +114,8 @@ namespace MVP_Tracker
             if (entries.Contains(id)) return;
             createPOICompass(cust);
             entries.Add(id);
+            var newEntry = quest.AddEntry(cust.NPC.FirstName);
+            questEntries.Add(newEntry);
         }
 
         internal void Update()
@@ -108,32 +135,38 @@ namespace MVP_Tracker
                 var poi = pois[id];
                 var compEl = compassEls[id];
 
-                if (!hasDealer)
+                foreach (var qEntry in questEntries)
                 {
-                    if (isCd)
+                    if (! qEntry.Title.Contains(cust.NPC.FirstName)) continue;
+                    if (!hasDealer)
                     {
-                        int rem = CooldownSeconds - (int)elapsed;
-                        AddItem(cust.NPC.FirstName, $"<color=orange>{cust.NPC.FirstName}: {rem / 60}h {rem % 60}m</color>");
-                        poi.gameObject.SetActive(false);
-                        compEl.Visible = false;
-                        if (!wasCd) onCd.Add(id);
+                        if (isCd)
+                        {
+                            int rem = CooldownSeconds - (int)elapsed;
+                            qEntry.SetActive(true);
+                            qEntry.SetEntryTitle($"<color=orange>{cust.NPC.FirstName}: {rem / 60}h {rem % 60}m</color>");
+                            poi.gameObject.SetActive(false);
+                            compEl.Visible = false;
+                            if (!wasCd) onCd.Add(id);
+                        }
+                        else
+                        {
+                            qEntry.SetActive(true);
+                            qEntry.SetEntryTitle($"<color=green>{cust.NPC.FirstName}: Available</color>");
+                            poi.transform.position = cust.NPC.transform.position;
+                            poi.SetMainText(cust.NPC.FirstName);
+                            poi.gameObject.SetActive(true);
+                            compEl.Visible = true;
+                            if (wasCd) onCd.Remove(id);
+                        }
                     }
                     else
                     {
-                        AddItem(cust.NPC.FirstName, $"<color=green>{cust.NPC.FirstName}: Available</color>");
-                        poi.transform.position = cust.NPC.transform.position;
-                        poi.SetMainText(cust.NPC.FirstName);
-                        poi.gameObject.SetActive(true);
-                        compEl.Visible = true;
-                        if (wasCd) onCd.Remove(id);
+                        qEntry.SetActive(true);
+                        qEntry.SetEntryTitle($"<color=red>{cust.NPC.FirstName} Warning: Dealer assigned! {cust.AssignedDealer.name}</color> ");
+                        poi.gameObject.SetActive(false);
+                        compEl.Visible = false;
                     }
-                }
-                else
-                {
-                    // treat warning like cooldown: hide markers
-                    AddItem(cust.NPC.FirstName, $"<color=red>{cust.NPC.FirstName} Warning: Dealer assigned! {cust.AssignedDealer.name}</color> ");
-                    poi.gameObject.SetActive(false);
-                    compEl.Visible = false;
                 }
             }
         }
@@ -154,31 +187,43 @@ namespace MVP_Tracker
             );
             compassEls[cust.NPC.ID] = compEl;
         }
-
-        public override void OnGUI()
+    }
+ 
+    public static class QuestManaging
+    {
+        public static string guid;
+        public static Quest CreateQuest(string title)
         {
-            GUILayout.BeginArea(new Rect(30, 30, 250, 150), GUI.skin.box );
-            GUILayout.Label(" MVP Tracker");
+            if (string.IsNullOrEmpty(guid))
+                guid = Guid.NewGuid().ToString();
 
-            foreach (var val in new List<string>(checklist.Values))
-            {
-                GUILayout.BeginHorizontal();
-                GUILayout.Label(val);
-                GUILayout.EndHorizontal();
-            }
-            GUILayout.EndArea();
+            var prefab = QuestManager.Instance.DefaultQuests[0];
+            var questGO = UnityEngine.Object.Instantiate(prefab.gameObject, QuestManager.Instance.QuestContainer);
+            var questCo = questGO.GetComponent<Quest>();
+
+            return questCo;
         }
 
-        public void AddItem(String id, String text)
+        public static QuestEntry AddEntry(this Quest quest, string entryTitle)
         {
-            if(checklist.ContainsKey(id))
-                RemoveItem(id);
-            checklist[id] = text;
+            var entryData = new QuestEntryData(entryTitle, EQuestState.Inactive);
+
+            var go = new GameObject(entryTitle);
+            go.transform.SetParent(quest.transform, worldPositionStays: false);
+            var entry = go.AddComponent<QuestEntry>();;
+
+            quest.Entries.Add(entry);
+            entry.SetData(entryData);
+
+            return entry;
         }
 
-        public void RemoveItem(string id)
+        public static void ClearEntries(this Quest quest)
         {
-            checklist.Remove(id);
+            foreach (var entry in quest.Entries.ToArray())
+                UnityEngine.Object.Destroy(entry.gameObject);
+
+            quest.Entries.Clear();
         }
     }
 }
