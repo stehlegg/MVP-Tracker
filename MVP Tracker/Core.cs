@@ -40,9 +40,16 @@ namespace MVP_Tracker
 
         private void OnSceneLoaded(Scene scene, LoadSceneMode mode)
         {
+            Customer.onCustomerUnlocked -= HandleCustomerUnlocked;
             if (!scene.name.Equals("Main", StringComparison.OrdinalIgnoreCase))
             {
                 MelonCoroutines.Stop(CooldownTicker());
+                quest.ClearEntries();
+                if (quest != null)
+                    UnityEngine.Object.Destroy(quest.gameObject);
+                quest = null;
+                Customer.onCustomerUnlocked -= HandleCustomerUnlocked;
+
                 return;
             }
             else
@@ -52,6 +59,7 @@ namespace MVP_Tracker
                 pois.Clear();
                 compassEls.Clear();
                 questEntries.Clear();
+                QuestManaging.guid = null;
 
                 if (Player.Local != null)
                 {
@@ -79,6 +87,7 @@ namespace MVP_Tracker
             }
             catch (Exception e)
             {
+                MelonLogger.Error(e);
                 yield break;
             }
             quest.Begin();
