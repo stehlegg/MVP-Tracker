@@ -1,4 +1,8 @@
-﻿using System.Collections;
+﻿using System;
+using System.Collections;
+using System.Collections.Generic;
+using System.Linq;
+using System.Collections;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 using MelonLoader;
@@ -10,8 +14,11 @@ using ScheduleOne.Map;
 using ScheduleOne.Persistence.Datas;
 using ScheduleOne.Quests;
 using ScheduleOne.PlayerScripts;
+using ScheduleOne.Product;
+using ScheduleOne.ItemFramework;
+using ScheduleOne.Persistence;
 
-[assembly: MelonInfo(typeof(MVP_Tracker.Core), "MVP Tracker", "1.1.0", "Stehlel", null)]            // UPDATE VERSION NUMBER LOL
+[assembly: MelonInfo(typeof(MVP_Tracker.Core), "MVP Tracker", "2.0.0", "Stehlel", null)]            // UPDATE VERSION NUMBER LOL
 [assembly: MelonGame("TVGS", "Schedule I")]
 
 namespace MVP_Tracker
@@ -34,12 +41,15 @@ namespace MVP_Tracker
 
         public override void OnInitializeMelon()
         {
-            MelonLogger.Msg("MVP Tracker geladen");
+            MelonLogger.Msg("MVP Tracker loaded");
             SceneManager.sceneLoaded += OnSceneLoaded;
         }
 
         private void OnSceneLoaded(Scene scene, LoadSceneMode mode)
         {
+            var sm = SaveManager.Instance;
+            sm.onSaveStart.AddListener(OnBeforeSave);
+            sm.onSaveComplete.AddListener(OnAfterSave);
             Customer.onCustomerUnlocked -= HandleCustomerUnlocked;
             if (!scene.name.Equals("Main", StringComparison.OrdinalIgnoreCase))
             {
@@ -75,6 +85,23 @@ namespace MVP_Tracker
             }
         }
 
+        private void OnBeforeSave()
+        {
+            var sm = SaveManager.Instance;
+            sm.Saveables.Remove(quest);
+            if (quest == null) return;
+            Quest.Quests.Remove(quest);
+            Debug.Log("[MVP Tracker] Dynamic quest suppressed from save");
+        }
+
+        private void OnAfterSave()
+        {
+            if (quest == null) return;
+            if (!Quest.Quests.Contains(quest))
+                Quest.Quests.Add(quest);
+            Debug.Log("[MVP Tracker] Dynamic quest restored after save");
+        }
+
         private IEnumerator InitializeNextFrame()
         {
             yield return null;
@@ -84,6 +111,13 @@ namespace MVP_Tracker
             try
             {
                 quest.InitializeQuest("MVP Tracker", "Helps you keep track of the richest customers", [], QuestManaging.guid);
+                var sm = SaveManager.Instance;
+
+                sm.Saveables.Remove(quest);
+                if (quest is IBaseSaveable baseSave)
+                {
+                    sm.BaseSaveables.Remove(baseSave);
+                }
             }
             catch (Exception e)
             {
@@ -115,7 +149,7 @@ namespace MVP_Tracker
             Create(cust);
         }
 
-        private const int CooldownSeconds = 600;
+        private const int CooldownSeconds = 360;
 
         internal void Create(Customer cust)
         {
@@ -146,7 +180,7 @@ namespace MVP_Tracker
 
                 foreach (var qEntry in questEntries)
                 {
-                    if (! qEntry.Title.Contains(cust.NPC.FirstName)) continue;
+                    if (!qEntry.Title.Contains(cust.NPC.FirstName)) continue;
                     if (!hasDealer)
                     {
                         if (isCd)
@@ -160,8 +194,14 @@ namespace MVP_Tracker
                         }
                         else
                         {
+                            var chance = calculateChance(cust);
+
+                            var getOptimal = GetOptimalProductAndPrice(cust);
+
+                            var budget = calculateDailyBudget(cust);
+
                             qEntry.SetActive(true);
-                            qEntry.SetEntryTitle($"<color=green>{cust.NPC.FirstName}: Available</color>");
+                            qEntry.SetEntryTitle($"<color=green>{cust.NPC.FirstName} ({chance}%): Budget: {budget}$, {getOptimal.optimalQuantity}x{getOptimal.product.Name} ({getOptimal.optimalPrice}$ ,{getOptimal.acceptanceProbability}%)</color>");
                             poi.transform.position = cust.NPC.transform.position;
                             poi.SetMainText(cust.NPC.FirstName);
                             poi.gameObject.SetActive(true);
@@ -178,6 +218,118 @@ namespace MVP_Tracker
                     }
                 }
             }
+        }
+
+        public (ProductDefinition product,
+                float optimalPrice,
+                float acceptanceProbability,
+                int optimalQuantity)
+        GetOptimalProductAndPrice(Customer cust, int priceStep = 5)
+        {
+            int orderDays = cust.CustomerData
+                .GetOrderDays(cust.CurrentAddiction, cust.NPC.RelationData.RelationDelta / 5f)
+                .Count;
+            orderDays = Mathf.Max(orderDays, 1);
+            float dailyBudget = cust.CustomerData
+                .GetAdjustedWeeklySpend(cust.NPC.RelationData.RelationDelta / 5f)
+                / orderDays;
+
+            EQuality q = cust.CustomerData.Standards.GetCorrespondingQuality();
+
+            ProductDefinition bestProduct = null;
+            float bestPrice = 0f, bestRevenue = 0f, bestProb = 0f;
+
+            var allProducts = ProductManager.Instance.AllProducts;
+            if (allProducts == null || allProducts.Count == 0)
+                return (null, 0f, 0f, 0);
+
+            foreach (var def in allProducts)
+            {
+                var inst = def.GetDefaultInstance(1);
+                if (inst is ProductItemInstance pi)
+                {
+                    pi.Quality = q;
+                    if (def.ValidPackaging != null && def.ValidPackaging.Length > 0)
+                        pi.SetPackaging(def.ValidPackaging[1]);
+                }
+                var items = new List<ItemInstance> { inst };
+
+                float basePrice = def.Price;
+                float startPrice = Mathf.Max(basePrice, priceStep);
+                float maxPrice = Mathf.Floor(dailyBudget * 3f / priceStep) * priceStep;
+                maxPrice = Mathf.Max(startPrice, maxPrice);
+
+                for (float price = startPrice; price <= maxPrice; price += priceStep)
+                {
+                    float prob = cust.GetOfferSuccessChance(items, price);
+                    float revenue = price * prob;
+                    if (revenue > bestRevenue)
+                    {
+                        bestRevenue = revenue;
+                        bestPrice = price;
+                        bestProduct = def;
+                        bestProb = prob;
+                    }
+                }
+            }
+
+            int optimalQuantity = 1;
+            float pricePerItem = bestPrice;
+            if (bestProduct != null && bestPrice > 0)
+            {
+                float enjoyment = cust.GetProductEnjoyment(bestProduct, q);
+                float priceFactor = Mathf.Lerp(0.66f, 1.5f, enjoyment);
+                int qty = Mathf.RoundToInt(dailyBudget * priceFactor / bestProduct.Price);
+                qty = Mathf.Clamp(qty, 1, 1000);
+                if (qty >= 14)
+                    qty = Mathf.RoundToInt(qty / 5f) * 5;
+                optimalQuantity = qty;
+                pricePerItem = bestPrice / qty;
+            }
+            bestProb = Mathf.RoundToInt(bestProb * 100f);
+            bestPrice = Mathf.RoundToInt(bestPrice);
+
+            return (bestProduct, bestPrice, bestProb, optimalQuantity);
+        }
+
+        internal int calculateChance(Customer cust)
+        {
+            int chancePercent = 0;
+
+            double num1 = Mathf.Clamp01(cust.TimeSinceLastDealCompleted / 1440f) * 0.5;
+            float num2 = cust.NPC.RelationData.NormalizedRelationDelta * 0.3f;
+            float num3 = cust.CurrentAddiction * 0.2f;
+
+            float chance = (float)(num1 + num2) + num3;
+
+            chancePercent = Mathf.RoundToInt(chance * 100f);
+
+            return chancePercent;
+        }
+
+        internal float calculateDailyBudget(Customer cust)
+        {
+            float dailyBudget = 0;
+
+            float weeklyBudget = cust.CustomerData.GetAdjustedWeeklySpend(cust.NPC.RelationData.RelationDelta / 5f);
+            int orderDays = cust.CustomerData.GetOrderDays(cust.CurrentAddiction, cust.NPC.RelationData.RelationDelta / 5f).Count;
+            dailyBudget = MathF.Round((weeklyBudget / orderDays));
+
+            return dailyBudget;
+        }
+
+        internal ProductDefinition bestProduct(Customer cust)
+        {
+            EQuality q = cust.CustomerData.Standards.GetCorrespondingQuality();
+            return cust.OrderableProducts
+                .Select(def => new {
+                    def,
+                    Appeal = cust.GetProductEnjoyment(def, q)
+                           + Mathf.Lerp(1f, -1f, def.Price / def.MarketValue / 2f)
+                })
+                .OrderByDescending(x => x.Appeal)
+                .First()
+                .def;
         }
 
         internal void createPOICompass(Customer cust)
