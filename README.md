@@ -7,6 +7,11 @@ Features:
   * When they are ready they are marked on the Map and on the Compass
   * Map/Compass markers follow their position so you always now where you can find them.
   * Notifies you when a MVP has a dealer assigned to them.
+  * Now Shows you (left to right) 
+     * probability they will accept an Instant Offer (Probability they open the Offer UI)
+     * Adjusted Daily Budget (Remember, with good product affinity you can get 3x that)
+     * recommended liked Product and amount + Price to reach maximum (prize * probability)
+![image](https://github.com/user-attachments/assets/b0d82002-6e39-4952-9a96-b27d1b919566)
 
 
 ![image](https://github.com/user-attachments/assets/dfe43880-a42c-4fb2-8e9c-5114f7221966)
